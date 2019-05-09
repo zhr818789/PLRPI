@@ -1,0 +1,1607 @@
+#-------------------------------------------------------------------------------
+# Name:PLRPI
+#
+# Author:ZHR
+#
+# Created:     14-02-2019
+# Copyright:   (c) king 2019
+# Licence:     <your licence>
+#-------------------------------------------------------------------------------
+#!/usr/bin/env python
+import numpy as np
+import matplotlib.pyplot as plt
+import keras
+from sklearn.ensemble import RandomForestClassifier ,GradientBoostingClassifier
+from sklearn.decomposition import PCA
+from sklearn import svm, grid_search
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.cross_validation import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_curve, auc
+from random import randint
+import pandas as pd
+import os
+import sys
+import random
+import argparse
+from keras.models import Sequential,Model
+from keras.layers.merge import concatenate
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.normalization import BatchNormalization
+from keras.layers.advanced_activations import PReLU
+from keras.utils import np_utils, generic_utils
+from keras.optimizers import SGD, RMSprop, Adadelta, Adagrad, Adam
+
+from keras import backend as K
+K.set_image_dim_ordering('th')
+
+def get_uniq_pdb_protein_rna():
+    protein_set = set()
+    with open('ncRNA-protein/NegativePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            protein_set.add(pro1.split('-')[0])
+            protein_set.add(pro2.split('-')[0])
+    
+    with open('ncRNA-protein/PositivePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            protein_set.add(pro1.split('-')[0])
+            protein_set.add(pro2.split('-')[0])
+    return protein_set  
+
+
+    
+
+
+def get_protein_rna_id(inputfile):
+    protein_set = set()
+    with open(inputfile, 'r') as fp:
+        for line in fp:
+            if line[0] == '#':
+                continue
+            else:
+                protein, rna = line.rstrip('\r\n').split()
+                protein_set.add(protein.split('_')[0])
+                protein_set.add(rna.split('_')[0])
+    return protein_set
+
+def judge_RNA_protein(seq):
+    if 'U' in seq:
+        return 'RNA'
+    if all([c in 'AUGCTIN' for c in seq]):
+        return 'RNA'
+    else:
+        return 'PROTEIN'
+
+
+
+
+def get_RNA_protein_RPI2241_RPI369(seq_fasta, interaction_file, protein_file, rna_file):
+    seq_dict = read_fasta_file(seq_fasta)
+    RNA_set = set()
+    protein_set = set()
+    with open(interaction_file, 'r') as fp:
+        for line in fp:
+            if line[0] == '#':
+                continue
+            pro1, pro2, label = line.rstrip().split('\t')
+            protein_set.add(pro1)
+            RNA_set.add(pro2)
+            
+    fw_pro = open(protein_file, 'w')
+    for val in protein_set:
+        if val in seq_dict:
+            fw_pro.write('>' + val + '\n')
+            fw_pro.write(seq_dict[val] + '\n')
+        else:
+            print( val)
+    fw_pro.close()
+    
+    fw_pro = open(rna_file, 'w')
+    for val in RNA_set:
+        if val in seq_dict:
+            fw_pro.write('>' + val + '\n')
+            fw_pro.write(seq_dict[val].replace('N', '') + '\n')
+        else:
+            print (val)
+    fw_pro.close()                 
+
+
+
+def get_RPI2241_RPI369_ind_file():
+    get_RNA_protein_RPI2241_RPI369('ncRNA-protein/RPI2241.fa', 'ncRNA-protein/RPI2241_all.txt', 'ncRNA-protein/RPI2241_protein.fa', 'ncRNA-protein/RPI2241_rna.fa')
+    get_RNA_protein_RPI2241_RPI369('ncRNA-protein/RPI369.fa', 'ncRNA-protein/RPI369_all.txt', 'ncRNA-protein/RPI369_protein.fa', 'ncRNA-protein/RPI369_rna.fa')
+    
+def read_fasta_file(fasta_file):
+    seq_dict = {}    
+    fp = open(fasta_file, 'r')
+    name = ''
+    for line in fp:
+        line = line.rstrip()
+        #distinguish header from sequence
+        if line[0]=='>': #or line.startswith('>')
+            #it is the header
+            name = line[1:].upper() #discarding the initial >
+            seq_dict[name] = ''
+        else:
+            #it is sequence
+            seq_dict[name] = seq_dict[name] + line
+    fp.close()
+    
+    return seq_dict
+    
+def get_RNA_protein():
+    seq_dict = read_fasta_file('ncRNA-protein/RPI369_protein.fa')
+    RNA_set = set()
+    protein_set = set()
+    with open('ncRNA-protein/NegativePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            protein_set.add(pro1)
+            RNA_set.add(pro2)
+    
+    with open('ncRNA-protein/PositivePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            protein_set.add(pro1)
+            RNA_set.add(pro2) 
+    
+    fw_pro = open('ncRNA-protein/protein_seq.fa', 'w')
+    for val in protein_set:
+        if val in seq_dict:
+            fw_pro.write('>' + val + '\n')
+            fw_pro.write(seq_dict[val] + '\n')
+        else:
+            print (val)
+    fw_pro.close()
+    
+    fw_pro = open('ncRNA-protein/RNA_seq.fa', 'w')
+    for val in RNA_set:
+        if val in seq_dict:
+            fw_pro.write('>' + val + '\n')
+            fw_pro.write(seq_dict[val] + '\n')
+        else:
+            print (val)
+    fw_pro.close() 
+
+def read_name_from_fasta(fasta_file):
+    name_list = []
+    fp = open(fasta_file, 'r')
+    for line in fp:
+        if line[0] == '>':
+            name = line.rstrip('\r\n')[1:]
+            name_list.append(name.upper())
+    fp.close()
+    return name_list
+
+def get_noncode_seq():
+    ncRNA_seq_dict = {}
+    head  = True
+    name = ''
+    #pdb.set_trace()
+    with open('ncRNA-protein/ncrna_NONCODE[v3.0].fasta', 'r') as fp:
+        for line in fp:
+            if head:
+                head =False
+                continue
+            line = line.rstrip()
+            if line == 'sequence':
+                continue
+            if line[0] == '>':
+                name1 = line.split('|')
+                name = name1[0][1:].strip()
+                ncRNA_seq_dict[name] = ''
+            else:
+                #it is sequence
+                ncRNA_seq_dict[name] = ncRNA_seq_dict[name] + line
+            
+    return ncRNA_seq_dict
+
+
+
+def read_RNA_pseaac_fea(name_list, pseaac_file='ncRNA-protein/RNA_pse.csv'):
+    print (pseaac_file)
+    data = {}
+    fp = open(pseaac_file, 'r')
+    index = 0
+    for line in fp:
+        values = line.rstrip('\r\n').split(',')
+        data[name_list[index]] = [float(val) for val in values]
+        index = index + 1
+    fp.close()
+    return data      
+    
+def read_RNA_graph_feature(name_list, graph_file='ncRNA-protein/RNA_seq.gz.feature', fea_imp = None):
+    print (graph_file)
+    data = {}
+    fea_len = 32768
+    fp = open(graph_file, 'r')
+    index = 0
+    for line in fp:
+        tmp_data = [0] * fea_len
+        values = line.split()
+        for value in values:
+            val = value.split(':')
+            tmp_data[int(val[0])] = float(val[1])
+        if fea_imp is None:
+            data[name_list[index]] = tmp_data
+        else:
+            data[name_list[index]] = [tmp_data[val] for val in fea_imp]
+        index = index + 1
+    fp.close()
+    return data   
+
+def read_protein_feature(protein_fea_file = 'ncRNA-protein/trainingSetFeatures.csv'):
+    print (protein_fea_file)
+    feature_dict = {}
+    df = pd.read_csv(protein_fea_file)
+    X = df.values.copy()
+    for val in X:
+        feature_dict[val[0].upper()] = val[2:].tolist()
+    
+    #pdb.set_trace()
+    return feature_dict
+
+def read_lncRNA_protein_feature(protein_fea_file = 'ncRNA-protein/trainingSetFeatures.csv'):
+    print (protein_fea_file)
+    feature_dict = {}
+    df = pd.read_csv(protein_fea_file)
+    X = df.values.copy()
+    for val in X:
+        feature_dict[val[0]] = val[2:].tolist()
+
+    return feature_dict
+
+def get_4_trids():
+    nucle_com = []
+    chars = ['A', 'C', 'G', 'U']
+    base=len(chars)
+    end=len(chars)**4
+    for i in range(0,end):
+        n=i
+        ch0=chars[n%base]
+        n=int(n/base)
+        ch1=chars[n%base]
+        n=int(n/base)
+        ch2=chars[n%base]
+        n=int(n/base)
+        ch3=chars[n%base]
+        nucle_com.append(ch0 + ch1 + ch2 + ch3)
+    return  nucle_com   
+
+def get_3_trids():
+    nucle_com = []
+    chars = ['A', 'C', 'G', 'U']
+    base=len(chars)
+    end=len(chars)**3
+    for i in range(0,end):
+        n=i
+        ch0=chars[n%base]
+        n=n/base
+        ch1=chars[n%base]
+        n=n/base
+        ch2=chars[n%base]
+        nucle_com.append(ch0 + ch1 + ch2)
+    return  nucle_com  
+           
+def get_4_nucleotide_composition(tris, seq, pythoncount = True):
+    seq_len = len(seq)
+    tri_feature = []
+    
+    if pythoncount:
+        for val in tris:
+            num = seq.count(val)
+            tri_feature.append(float(num)/seq_len)
+    else:
+        k = len(tris[0])
+        tmp_fea = [0] * len(tris)
+        for x in range(len(seq) + 1- k):
+            kmer = seq[x:x+k]
+            if kmer in tris:
+                ind = tris.index(kmer)
+                tmp_fea[ind] = tmp_fea[ind] + 1
+        tri_feature = [float(val)/seq_len for val in tmp_fea]
+        #pdb.set_trace()        
+    return tri_feature
+
+def TransDict_from_list(groups):
+    transDict = dict()
+    tar_list = ['0', '1', '2', '3', '4', '5', '6']
+    result = {}
+    index = 0
+    for group in groups:
+        g_members = sorted(group) #Alphabetically sorted list
+        for c in g_members:
+            # print('c' + str(c))
+            # print('g_members[0]' + str(g_members[0]))
+            result[c] = str(tar_list[index]) #K:V map, use group's first letter as represent.
+        index = index + 1
+    return result
+
+def translate_sequence (seq, TranslationDict):
+
+    import string
+    from_list = []
+    to_list = []
+    for k,v in TranslationDict.items():
+        from_list.append(k)
+        to_list.append(v)
+    TRANS_seq = seq.translate(str.maketrans(str(from_list), str(to_list)))
+
+    return TRANS_seq
+
+def get_protein_trids(seq, group_dict):
+
+    tran_seq = translate_sequence (seq, group_dict)
+    #pdb.set_trace()
+    return tran_seq
+
+def get_3_protein_trids():
+    nucle_com = []
+    chars = ['0', '1', '2', '3', '4', '5', '6']
+    base=len(chars)
+    end=len(chars)**3
+    for i in range(0,end):
+        n=i
+        ch0=chars[n%base]
+        n=int(n/base)
+        ch1=chars[int(n)%base]
+        n=int(n/base)
+        ch2=chars[n%base]
+        nucle_com.append(ch0 + ch1 + ch2)
+    return  nucle_com
+
+def get_4_protein_trids():
+    nucle_com = []
+    chars = ['0', '1', '2', '3', '4', '5', '6']
+    base=len(chars)
+    end=len(chars)**4
+    for i in range(0,end):
+        n=i
+        ch0=chars[n%base]
+        n=n/base
+        ch1=chars[n%base]
+        n=n/base
+        ch2=chars[n%base]
+        n=n/base
+        ch3=chars[n%base]
+        nucle_com.append(ch0 + ch1 + ch2 + ch3)
+    return  nucle_com
+
+
+
+def get_own_lncRNA_protein(datafile = 'ncRNA-protein/lncRNA-protein-488.txt'):
+    protein_seq = {}
+    RNA_seq = {}
+    interaction_pair = {}
+    with open(datafile, 'r') as fp:
+        for line in fp:
+            if line[0] == '>':
+                values = line[1:].strip().split('|')
+                label = values[1]
+                name = values[0].split('_')
+                protein = name[0] + '-' + name[1]
+                RNA = name[0] + '-' + name[2]
+                if label == 'interactive':
+                    interaction_pair[(protein, RNA)] = 1
+                else:
+                    interaction_pair[(protein, RNA)] = 0
+                index  = 0
+            else:
+                seq = line[:-1]
+                if index == 0:
+                    protein_seq[protein] = seq
+                else:
+                    RNA_seq[RNA] = seq
+                index = index + 1
+    #pdb.set_trace()
+    fw = open('ncRNA-protein/lncRNA_protein.fa', 'w')
+    for key, val in protein_seq.iteritems():
+        fw.write('>' + key + '\n')
+        fw.write(val + '\n')
+        
+    fw.close()
+    
+    fw = open('ncRNA-protein/lncRNA_RNA.fa', 'w')
+    for key, val in RNA_seq.iteritems():
+        fw.write('>' + key + '\n')
+        fw.write(val.replace('N', '') + '\n')
+        
+    fw.close()
+    '''
+    cli_str = "python ProFET/ProFET/feat_extract/pipeline.py --trainingSetDir 'ncRNA-protein/lncRNA-protein/' \
+    --trainFeatures True --resultsDir 'ncRNA-protein/lncRNA-protein/' --classType file"
+    fcli = os.popen(cli_str, 'r')
+    fcli.close()
+    '''
+def read_name_from_lncRNA_fasta(fasta_file):
+    name_list = []
+    fp = open(fasta_file, 'r')
+    for line in fp:
+        if line[0] == '>':
+            name = line.rstrip('\r\n')[1:]
+            name_list.append(name)
+    fp.close()
+    return name_list
+
+def prepare_complex_feature(rna_file, protein_file, seperate = False):
+    RNA_seq_dict = read_fasta_file(rna_file)
+    protein_seq_dict = read_fasta_file(protein_file)
+    groups = ['AGV', 'ILFP', 'YMTS', 'HNQW', 'RK', 'DE', 'C']
+    group_dict = TransDict_from_list(groups)
+    protein_tris = get_3_protein_trids()
+    tris = get_4_trids()
+    pairs = []
+    train = []
+    label = []
+    for RNA, RNA_seq in RNA_seq_dict.items():
+        RNA_seq = RNA_seq.replace('T', 'U')
+        for protein, protein_seq in protein_seq_dict.items():
+            pairs.append((RNA, protein))
+            protein_seq1 = translate_sequence (protein_seq, group_dict)
+            RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+            protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq1, pythoncount =False)
+            if seperate:
+                tmp_fea = (protein_tri_fea, RNA_tri_fea)
+            else:
+                tmp_fea = protein_tri_fea + RNA_tri_fea
+            train.append(tmp_fea)            
+    
+    return np.array(train), pairs
+
+def prepare_RPI488_feature(extract_only_posi = False, 
+                                   pseaac_file = None, deepmind = False, seperate = False, chem_fea = True):
+    print ('RPI488 dataset')
+    interaction_pair = {}
+    RNA_seq_dict = {}
+    protein_seq_dict = {}
+    with open('ncRNA-protein/lncRNA-protein-488.txt', 'r') as fp:
+        for line in fp:
+            if line[0] == '>':
+                values = line[1:].strip().split('|')
+                label = values[1]
+                name = values[0].split('_')
+                protein = name[0] + '-' + name[1]
+                RNA = name[0] + '-' + name[2]
+                if label == 'interactive':
+                    interaction_pair[(protein, RNA)] = 1
+                else:
+                    interaction_pair[(protein, RNA)] = 0
+                index  = 0
+            else:
+                seq = line[:-1]
+                if index == 0:
+                    protein_seq_dict[protein] = seq
+                else:
+                    RNA_seq_dict[RNA] = seq
+                index = index + 1
+    #name_list = read_name_from_lncRNA_fasta('ncRNA-protein/lncRNA_RNA.fa')           
+    groups = ['AGV', 'ILFP', 'YMTS', 'HNQW', 'RK', 'DE', 'C']
+    group_dict = TransDict_from_list(groups)
+    protein_tris = get_3_protein_trids()
+    tris = get_4_trids()
+    #tris3 = get_3_trids()
+    train = []
+    label = []
+    chem_fea = []
+    for key, val in interaction_pair.items():
+        protein, RNA = key[0], key[1]
+        #pdb.set_trace()
+        if RNA in RNA_seq_dict and protein in protein_seq_dict:
+            label.append(val)
+            RNA_seq = RNA_seq_dict[RNA]
+            protein_seq = translate_sequence (protein_seq_dict[protein], group_dict)
+            if deepmind:
+                RNA_tri_fea = get_RNA_seq_concolutional_array(RNA_seq)
+                protein_tri_fea = get_RNA_seq_concolutional_array(protein_seq) 
+                train.append((RNA_tri_fea, protein_tri_fea))
+            else:
+                #pdb.set_trace()
+                RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+                protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq, pythoncount =False)
+
+                if seperate:
+                    tmp_fea = (protein_tri_fea, RNA_tri_fea)
+                    #chem_tmp_fea = (protein_fea_dict[protein], RNA_fea_dict[RNA])
+                else:
+                    tmp_fea = protein_tri_fea + RNA_tri_fea
+                    #chem_tmp_fea = protein_fea_dict[protein] + RNA_fea_dict[RNA] 
+                train.append(tmp_fea)
+                #chem_fea.append(chem_tmp_fea)
+        else:
+            print (RNA, protein)
+    
+    return np.array(train), label             
+
+def prepare_RPIntDB_feature(extract_only_posi = False, 
+                                   pseaac_file = None, deepmind = False, seperate = False, chem_fea = True):
+    groups = ['AGV', 'ILFP', 'YMTS', 'HNQW', 'RK', 'DE', 'C']
+    group_dict = TransDict_from_list(groups)
+    protein_tris = get_3_protein_trids()
+    tris = get_4_trids()
+    #tris3 = get_3_trids()
+    train = []
+    label = []
+    chem_fea = []
+    head = True
+    with open('ncRNA-protein/RPIntDB_interactions_new.txt', 'r') as fp:
+        for line in fp:
+            if head:
+                head = False
+                continue
+            values = line.rstrip('\r\n').split('\t')
+            protein = values[0]
+            protein_seq = values[1]
+            RNA = values[2]
+            RNA_seq = values[3] 
+            label.append(1)
+            RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+            protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq, pythoncount =False)
+    
+            if seperate:
+                tmp_fea = (protein_tri_fea, RNA_tri_fea)
+                #chem_tmp_fea = (protein_fea_dict[protein], RNA_fea_dict[RNA])
+            else:
+                tmp_fea = protein_tri_fea + RNA_tri_fea
+                #chem_tmp_fea = protein_fea_dict[protein] + RNA_fea_dict[RNA] 
+            train.append(tmp_fea) 
+    
+    return np.array(train), label
+        
+def prepare_RPI2241_369_feature(rna_fasta_file, data_file, protein_fasta_file, extract_only_posi = False, 
+                                graph = False, deepmind = False, seperate = False, chem_fea = True):
+    seq_dict = read_fasta_file(rna_fasta_file)
+    #print(seq_dict)
+    protein_seq_dict = read_fasta_file(protein_fasta_file)
+    #print(protein_seq_dict)
+    groups = ['AGV', 'ILFP', 'YMTS', 'HNQW', 'RK', 'DE', 'C']
+    group_dict = TransDict_from_list(groups)
+    print(group_dict)
+    protein_tris = get_3_protein_trids()
+    tris = get_4_trids()
+    train = []
+    label = []
+    chem_fea = []
+    with open(data_file, 'r') as fp:
+        for line in fp:
+            if line[0] == '#':
+                continue
+            protein, RNA, tmplabel = line.rstrip('\r\n').split('\t')
+            if RNA in seq_dict.keys():
+                print(RNA )
+                print("00000000000000000000")
+                #print(seq_dict.keys())
+
+            if RNA in seq_dict.keys() and protein in protein_seq_dict.keys():
+                print("sssssssssssssssssssssssssss")
+                label.append(int(tmplabel))
+                RNA_seq = seq_dict[RNA]
+               # print(RNA_seq)
+                protein_seq = translate_sequence (protein_seq_dict[protein], group_dict)
+                #print(protein_seq)
+                if deepmind:
+                    RNA_tri_fea = get_RNA_seq_concolutional_array(RNA_seq)
+                    protein_tri_fea = get_RNA_seq_concolutional_array(protein_seq) 
+                    train.append((RNA_tri_fea, protein_tri_fea))
+                else:
+                    RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+                    protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq, pythoncount =False)
+                    if seperate:
+                        tmp_fea = (protein_tri_fea, RNA_tri_fea)
+                    else:
+                        tmp_fea = protein_tri_fea + RNA_tri_fea
+                    train.append(tmp_fea)
+            else:
+                print (RNA, protein )
+            
+    return np.array(train), label
+
+
+
+def read_orf_seq(fasta_file, RNA = False):
+    protein_seq_dict = {} 
+    with open(fasta_file, 'r') as fp:
+        for line in fp:
+            line = line.rstrip()
+            if line[0] == '>':
+                name1 = line.split()
+                name = name1[0][1:].strip()
+                protein_seq_dict[name] = ''
+            else:
+                if RNA:
+                    line = line.replace('T', 'U')
+                protein_seq_dict[name] = protein_seq_dict[name] + line
+    
+    return protein_seq_dict
+
+def read_orf_interaction(interaction_file):
+    interacton_pair = []
+    with open(interaction_file, 'r') as fp:
+        head  = True
+        for line in fp:
+            if head:
+                head = False
+                continue
+            values = line.rstrip().split()
+            protein, RNA = values[0].split('_') 
+            interacton_pair.append((protein, RNA))
+    return interacton_pair
+
+
+
+def prepare_RPI1807_feature(graph = False, deepmind = False, seperate = False, chem_fea = True):
+    print ('RPI-Pred data')
+    #name_list = read_name_from_fasta('ncRNA-protein/RNA_seq.fa')
+    seq_dict = read_fasta_file('ncRNA-protein/RPI1807_RNA_seq.fa')
+    protein_seq_dict = read_fasta_file('ncRNA-protein/RPI1807_protein_seq.fa')
+    groups = ['AGV', 'ILFP', 'YMTS', 'HNQW', 'RK', 'DE', 'C']
+    group_dict = TransDict_from_list(groups)
+    protein_tris = get_3_protein_trids()
+    tris = get_4_trids()
+    train = []
+    label = []
+    chem_fea = []
+    with open('ncRNA-protein/RPI1807_PositivePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            pro1 = pro1.upper()
+            pro2 = pro2.upper()
+            if pro2 in seq_dict.keys() and pro1 in protein_seq_dict.keys():
+                label.append(1)
+                RNA_seq = seq_dict[pro2]
+                protein_seq = translate_sequence (protein_seq_dict[pro1], group_dict)
+                if deepmind:
+                    RNA_tri_fea = get_RNA_seq_concolutional_array(RNA_seq)
+                    protein_tri_fea = get_RNA_seq_concolutional_array(protein_seq) 
+                    train.append((RNA_tri_fea, protein_tri_fea))
+                else:
+                    RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+                    protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq, pythoncount =False)
+                    if seperate:
+                        tmp_fea = (protein_tri_fea, RNA_tri_fea)
+                        #chem_tmp_fea = (protein_fea_dict[pro1], RNA_fea_dict[pro2])
+                    else:
+                        tmp_fea = protein_tri_fea + RNA_tri_fea
+                    train.append(tmp_fea)
+            else:
+                print (pro1, pro2)
+    with open('ncRNA-protein/RPI1807_NegativePairs.csv', 'r') as fp:
+        for line in fp:
+            if 'Protein ID' in line:
+                continue
+            pro1, pro2 = line.rstrip().split('\t')
+            pro1 = pro1.upper()
+            pro2 = pro2.upper()            
+            if pro2 in seq_dict.keys() and pro1 in protein_seq_dict.keys():
+                label.append(0)
+                RNA_seq = seq_dict[pro2]
+                protein_seq = translate_sequence (protein_seq_dict[pro1], group_dict)
+                if deepmind:
+                    RNA_tri_fea = get_RNA_seq_concolutional_array(RNA_seq)
+                    protein_tri_fea = get_RNA_seq_concolutional_array(protein_seq) 
+                    train.append((RNA_tri_fea, protein_tri_fea))
+                else:
+                    RNA_tri_fea = get_4_nucleotide_composition(tris, RNA_seq, pythoncount =False)
+                    protein_tri_fea = get_4_nucleotide_composition(protein_tris, protein_seq, pythoncount =False)
+                    if seperate:
+                        tmp_fea = (protein_tri_fea, RNA_tri_fea)
+                    else:
+                        tmp_fea = protein_tri_fea + RNA_tri_fea
+                    train.append(tmp_fea)
+                    #chem_fea.append(chem_tmp_fea)
+            else:
+                print (pro1, pro2)
+    return np.array(train), label
+
+def calculate_performace(test_num, pred_y,  labels):
+    tp =0
+    fp = 0
+    tn = 0
+    fn = 0
+    for index in range(test_num):
+        if labels[index] ==1:
+            if labels[index] == pred_y[index]:
+                tp = tp +1
+            else:
+                fn = fn + 1
+        else:
+            if labels[index] == pred_y[index]:
+                tn = tn +1
+            else:
+                fp = fp + 1               
+            
+    acc = float(tp + tn)/test_num
+    precision = float(tp)/(tp+ fp)
+    sensitivity = float(tp)/ (tp+fn)
+    specificity = float(tn)/(tn + fp)
+    MCC = float(tp*tn-fp*fn)/(np.sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn)))
+    return acc, precision, sensitivity, specificity, MCC 
+
+
+
+def calculate_performace_without_MCC(test_num, pred_y,  labels):
+    tp =0
+    fp = 0
+    tn = 0
+    fn = 0
+    for index in range(test_num):
+        if labels[index] ==1:
+            if labels[index] == pred_y[index]:
+                tp = tp +1
+            else:
+                fn = fn + 1
+        else:
+            if labels[index] == pred_y[index]:
+                tn = tn +1
+            else:
+                fp = fp + 1               
+            
+    acc = float(tp + tn)/test_num
+    #precision = float(tp)/(tp+ fp)
+    sensitivity = float(tp)/ (tp+fn)
+    return acc, sensitivity
+
+def get_protein_seq_concolutional_array(seq, motif_len = 4):
+    #tar_list = ['0', '1', '2', '3', '4', '5', '6']
+    #data = {}
+    alpha = '0123456'
+    #for key, seq in seq_dict.iteritems():
+    row = (len(seq) + 2*motif_len - 2)
+    new_array = np.zeros((row, 7))
+    for i, val in enumerate(seq):
+        if val not in alpha:
+            new_array[i] = np.array([0.15]*7)
+            continue
+        if val == 'N' or i < motif_len or i > len(seq) - motif_len:
+            new_array[i] = np.array([0.15]*7)
+        else:
+            index = alpha.index(val)
+        new_array[i][index] = 1
+        #data[key] = new_array
+    return new_array
+
+def get_RNA_seq_concolutional_array(seq, motif_len = 4):
+    '''
+        𝑆𝑖,𝑗 = {
+    .25 if 𝑠𝑖−𝑚+1 = N or 𝑖 < 𝑚 or 𝑖 > 𝑛 − 𝑚
+    1 if 𝑠𝑖−𝑚+1 = 𝑗th base in (A, C, G, T)
+    0 otherwise
+    '''
+    #data = {}
+    alpha = 'ACGT'
+    #for seq in seqs:
+    #for key, seq in seqs.iteritems():
+    row = (len(seq) + 2*motif_len - 2)
+    new_array = np.zeros((row, 4))
+    for i, val in enumerate(seq):
+        if val not in 'ACGTN':
+            new_array[i] = np.array([0.25]*4)
+            continue
+        if val == 'N' or i < motif_len or i > len(seq) - motif_len:
+            new_array[i] = np.array([0.25]*4)
+        else:
+            index = alpha.index(val)
+            new_array[i][index] = 1
+        #data[key] = new_array
+    return new_array
+
+def get_RNA_protein_concolutional_array(seq, motif_len = 4):
+    '''
+        𝑆𝑖,𝑗 = {
+    .25 if 𝑠𝑖−𝑚+1 = N or 𝑖 < 𝑚 or 𝑖 > 𝑛 − 𝑚
+    1 if 𝑠𝑖−𝑚+1 = 𝑗th base in (A, C, G, T)
+    0 otherwise
+    '''
+    data = {}
+    alpha = 'ACGT0123456'
+    #for seq in seqs:
+    #for key, seq in seqs.iteritems():
+    row = (len(seq) + 2*motif_len - 2)
+    new_array = np.zeros((row, 11))
+    for i, val in enumerate(seq):
+        if val not in alpha:
+            new_array[i] = np.array([0.25]*11)
+        if val == 'N' or i < motif_len or i > len(seq) - motif_len:
+            new_array[i] = np.array([0.25]*11)
+        else:
+            index = alpha.index(val)
+            new_array[i][index] = 1
+        #data[key] = new_array
+    return new_array
+
+def pca_reduce_dimension(group_data, n_components = 50):
+    print ('running PCA')
+    pca = PCA(n_components=n_components)
+    pca.fit(group_data)
+    group_data = pca.transform(group_data)
+    return group_data
+
+def preprocess_data(X, scaler=None, stand = True):
+    #X=X.reshape(-1, 1)
+    if not scaler:
+        if stand:
+            scaler = StandardScaler()
+        else:
+            scaler = MinMaxScaler()
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+
+def preprocess_labels(labels, encoder=None, categorical=True):
+    if not encoder:
+        encoder = LabelEncoder()
+        encoder.fit(labels)
+    y = encoder.transform(labels).astype(np.int32)
+    if categorical:
+        y = np_utils.to_categorical(y)
+    return y, encoder
+
+def load_data(path, train=True):
+    df = pd.read_csv(path)
+    X = df.values.copy()
+    if train:
+        np.random.shuffle(X)  # https://youtu.be/uyUXoap67N8
+        X, labels = X[:, 1:-1].astype(np.float32), X[:, -1]
+        return X, labels
+    else:
+        X, ids = X[:, 1:].astype(np.float32), X[:, 0].astype(str)
+        return X, ids
+
+def get_data(dataset):
+    if dataset == 'RPI1807':
+        X, labels = prepare_RPI1807_feature(graph = False, chem_fea = False)
+    elif dataset == 'RPI2241':
+        X, labels = prepare_RPI2241_369_feature('ncRNA-protein/RPI2241_trainingSetFeatures.csv', 'ncRNA-protein/RPI2241.csv', 
+                                                  'ncRNA-protein/RPI2241_rna.fa', 'ncRNA-protein/RPI2241_all.txt', 'ncRNA-protein/RPI2241_protein.fa', graph = False)
+    elif dataset == 'RPI369':
+        X, labels, chem_fea = prepare_RPI2241_369_feature('ncRNA-protein/RPI369_trainingSetFeatures.csv', 'ncRNA-protein/RPI369.csv', 
+                                                  'ncRNA-protein/RPI369_rna.fa', 'ncRNA-protein/RPI369_all.txt', 'ncRNA-protein/RPI369_protein.fa', graph = False)
+    elif dataset == 'RPI488':
+        X, labels = prepare_RPI488_feature()
+        
+    print (X.shape)
+    X, scaler = preprocess_data(X)
+    dims = X.shape[1]
+    print(dims, 'dims')
+    
+    return X, labels
+
+
+
+def build_deep_classical_autoencoder(autoencoder, input_dim, hidden_dim, activation, weight_reg = None, activity_reg = None):
+    # 编码器为：
+    encoder = Sequential([Dense(input_dim, hidden_dim, activation=activation, W_regularizer=weight_reg, activity_regularizer=activity_reg),
+                            Dense(hidden_dim, hidden_dim/2, activation=activation)])
+    decoder = Sequential([Dense(hidden_dim/2, hidden_dim, activation=activation),
+                          Dense(hidden_dim, input_dim, activation=activation, W_regularizer=weight_reg, activity_regularizer=activity_reg)])
+    autoencoder.add(encoder)
+    autoencoder.add(decoder)
+
+    return autoencoder
+
+
+def deep_autoencoder(dataset = 'RPI-Pred'):
+    X, labels, chem_fea = get_data(dataset)
+    y, encoder = preprocess_labels(labels)
+    
+    num_cross_val = 5
+    batch_size  = 40
+    nb_epoch = 100
+    all_performance = []
+    activation = 'linear' #'linear' #'relu, softmax, tanh'
+    for fold in range(num_cross_val):
+        train = []
+        test = []
+        train = np.array([x for i, x in enumerate(X) if i % num_cross_val != fold])
+        test = np.array([x for i, x in enumerate(X) if i % num_cross_val == fold])
+        train_label = np.array([x for i, x in enumerate(y) if i % num_cross_val != fold])
+        test_label = np.array([x for i, x in enumerate(y) if i % num_cross_val == fold])
+        chem_train = np.array([x for i, x in enumerate(chem_fea) if i % num_cross_val != fold])
+        chem_test = np.array([x for i, x in enumerate(chem_fea) if i % num_cross_val == fold])
+                
+        autoencoder = Sequential()
+        autoencoder = build_deep_classical_autoencoder(autoencoder, train.shape[1], 256, activation)
+        autoencoder.get_config(verbose=0)
+        autoencoder.add(Dropout(0.5))
+        sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+        autoencoder.compile(loss='mean_squared_error', optimizer= sgd) #'adam')
+        autoencoder.fit(train, train, batch_size=batch_size, nb_epoch=nb_epoch, show_accuracy=False, verbose=0)
+        prefilter_train = autoencoder.predict(train, verbose=0)
+        prefilter_test = autoencoder.predict(test, verbose=0)
+        prefilter_train = np.concatenate((prefilter_train, chem_train), axis = 1)
+        prefilter_test = np.concatenate((prefilter_test, chem_test), axis = 1)
+        print ('using random forest')
+        train_label_new = []
+        for val in train_label:
+            if val[0] == 1:
+                train_label_new.append(0)
+            else:
+                train_label_new.append(1)
+        clf = GradientBoostingClassifier(random_state=10)
+        clf.fit(prefilter_train, train_label_new)
+        y_pred = clf.predict(prefilter_test)
+        real_labels = []
+        for val in test_label:
+            if val[0] == 1:
+                real_labels.append(0)
+            else:
+                real_labels.append(1)
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), y_pred,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance.append([acc, precision, sensitivity, specificity, MCC])
+
+        prefilter_train = []
+        prefilter_test = []
+    print ('mean performance')
+    print (np.mean(np.array(all_performance), axis=0))
+
+def construct_one_layer_network(X_train, X_test, input_dim, output_dim, activation = 'linear', batch_size = 100, nb_epoch = 100):
+    print ('constructing one-layer network')
+    autoencoder = Sequential()
+    autoencoder = build_deep_classical_autoencoder(autoencoder, input_dim, output_dim, activation)
+    autoencoder.get_config(verbose=0)
+    autoencoder.add(Dropout(0.5))
+    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    autoencoder.compile(loss='mean_squared_error', optimizer= sgd)
+    autoencoder.fit(X_train, X_train, batch_size=batch_size, nb_epoch=nb_epoch, show_accuracy=False, verbose=0)
+    output_reconstruction=False
+    first_train = autoencoder.predict(X_train, verbose=0)
+    first_test = autoencoder.predict(X_test, verbose=0)
+    
+    return autoencoder, first_train, first_test
+
+def autoencoder_fine_tuning(encoders, X_train, Y_train, X_test, batch_size, nb_epoch):
+    print ('fine tunning')
+    model = Sequential()
+    for encoder in encoders:
+        model.add(encoder.layers[0].encoder)
+    model.add(Dense(128, 2, activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch, show_accuracy=False, verbose=0)
+    X_train_tmp = np.copy(X_train)
+    X_test_tmp = np.copy(X_test)   
+    model2 = Sequential() 
+    for ae in model.layers[:-1]:
+        model2.add(ae)
+        
+    model2.compile(loss='mean_squared_error', optimizer='adam')
+    X_train_tmp = model2.predict(X_train_tmp)
+    print (X_train_tmp.shape)
+    X_test_tmp = model2.predict(X_test_tmp)
+    
+    return X_train_tmp, X_test_tmp        
+
+def get_preds( score1, score2, score3, weights):
+    new_score  = [weights[0]*val1 + weights[1]* val2 + weights[2]* val3  for val1, val2, val3 in zip(score1, score2, score3)]
+    return new_score
+
+def transfer_label_from_prob(proba):
+    label = [1 if val>=0.5 else 0 for val in proba]
+    return label
+
+def get_blend_data(j, clf, skf, X_test, X_dev, Y_dev, blend_train, blend_test):
+        print ('Training classifier [%s]' % (j))
+        blend_test_j = np.zeros((X_test.shape[0], len(skf)))
+        for i, (train_index, cv_index) in enumerate(skf):
+            print ('Fold [%s]' % (i))
+            # This is the training and validation set
+            X_train = X_dev[train_index]
+            Y_train = Y_dev[train_index]
+            X_cv = X_dev[cv_index]
+            Y_cv = Y_dev[cv_index]
+            
+            clf.fit(X_train, Y_train)
+            blend_train[cv_index, j] = clf.predict_proba(X_cv)[:,1]
+            blend_test_j[:, i] = clf.predict_proba(X_test)[:,1]
+        # Take the mean of the predictions of the cross validation set
+        blend_test[:, j] = blend_test_j.mean(1)
+        print ('Y_dev.shape = %s' % (Y_dev.shape))
+
+def multiple_autoencoder_extract_feature(dataset = 'RPI-Pred'):
+    X, labels = get_data(dataset)
+    #X = pca_reduce_dimension(X, n_components = 300)
+    y, encoder = preprocess_labels(labels)
+    num_cross_val = 5
+    batch_size  = 40
+    nb_epoch = 100
+    all_performance = []
+    all_performance_rf = []
+    all_performance_ensemb = []
+    all_performance_ae = []
+    all_performance_rf_seq = []
+    all_performance_chem = []
+    all_performance_blend = []
+    activation = 'linear'
+    for fold in range(num_cross_val):
+        train = []
+        test = []
+        train = np.array([x for i, x in enumerate(X) if i % num_cross_val != fold])
+        test = np.array([x for i, x in enumerate(X) if i % num_cross_val == fold])
+        train_label = np.array([x for i, x in enumerate(y) if i % num_cross_val != fold])
+        test_label = np.array([x for i, x in enumerate(y) if i % num_cross_val == fold])
+
+        real_labels = []
+        for val in test_label:
+            if val[0] == 1:
+                real_labels.append(0)
+            else:
+                real_labels.append(1)
+
+        train_label_new = []
+        for val in train_label:
+            if val[0] == 1:
+                train_label_new.append(0)
+            else:
+                train_label_new.append(1)
+        blend_train = np.zeros((train.shape[0], 3)) # Number of training data x Number of classifiers
+        blend_test = np.zeros((test.shape[0], 3)) # Number of testing data x Number of classifiers 
+        skf = list(StratifiedKFold(train_label_new, 3))  
+        #pdb.set_trace()     
+        class_index = 0                   
+        encoders = multiple_layer_autoencoder(train, test, activation = 'sigmoid', batch_size = 100, nb_epoch = 100, last_dim = 128)
+        prefilter_train = np.copy(train)
+        prefilter_test = np.copy(test) 
+        for ae in encoders:
+            prefilter_train = ae.predict(prefilter_train)
+            print (prefilter_train.shape)
+            prefilter_test = ae.predict(prefilter_test)
+            
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(prefilter_train, train_label_new)
+        y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+        #pdb.set_trace()
+        y_pred = transfer_label_from_prob(y_pred_prob)
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), y_pred,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance_ae.append([acc, precision, sensitivity, specificity, MCC])
+        print ('---' * 50)
+        
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(train_label_new), blend_train, blend_test)
+        
+        
+        prefilter_train, prefilter_test = autoencoder_fine_tuning(encoders, train, train_label, test, 100, 100)
+        print ('using random forest after sequence autoencoder')
+        class_index = class_index + 1
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(prefilter_train, train_label_new)
+        y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+        y_pred = transfer_label_from_prob(y_pred_prob)
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), y_pred,  real_labels)
+        print(acc, precision, sensitivity, specificity, MCC)
+        all_performance.append([acc, precision, sensitivity, specificity, MCC])
+        print('---' * 50)
+        
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(train_label_new), blend_train, blend_test)
+        
+        print ('using RF using only sequence feature')
+        class_index = class_index + 1
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(train, train_label_new)
+        y_pred_rf_prob = clf.predict_proba(test)[:,1]
+        y_pred_rf = transfer_label_from_prob(y_pred_rf_prob)
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), y_pred_rf,  real_labels)
+        print(acc, precision, sensitivity, specificity, MCC)
+        all_performance_rf_seq.append([acc, precision, sensitivity, specificity, MCC]) 
+        print('---' * 50)
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, test, train, np.array(train_label_new), blend_train, blend_test)
+        bclf = LogisticRegression()
+        bclf.fit(blend_train, train_label_new)
+        Y_test_predict = bclf.predict(blend_test)
+        print('blend result')
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), Y_test_predict,  real_labels)
+        print(acc, precision, sensitivity, specificity, MCC)
+        all_performance_blend.append([acc, precision, sensitivity, specificity, MCC])     
+        print ('---' * 50)
+
+    print( 'in summary')
+    print( 'mean performance of chem autoencoder without fine tunning')
+    print( np.mean(np.array(all_performance_ae), axis=0) )
+    print( '---' * 50)
+    print('mean performance of sequence autoencoder')
+    print(np.mean(np.array(all_performance), axis=0))
+    print( '---' * 50 )
+    print ('mean performance of only chem using RF')
+    print (np.mean(np.array(all_performance_rf), axis=0))
+    print ('---' * 50 )
+    print ('mean performance of blend fusion')
+    print( np.mean(np.array(all_performance_blend), axis=0) )
+    print( '---' * 50 )
+           
+
+
+def indep_validation():
+    X, labels = prepare_RPI1807_feature(graph = False)
+    print (X.shape)
+    test, test_label = prepare_NPinter_feature(extract_only_posi = False, graph = False)
+    print (test.shape)
+    X, scaler = preprocess_data(X)
+    test, _ = preprocess_data(test, scaler=scaler)
+    print ('using random forest')
+    clf = GradientBoostingClassifier(n_estimators=40)
+    clf.fit(np.array(X), np.array(labels))
+    y_pred = clf.predict(test)
+    acc, precision, sensitivity, specificity, MCC = calculate_performace(len(test_label), y_pred,  test_label)
+    print (acc, precision, sensitivity, specificity, MCC)
+
+
+
+
+
+def transfer_array_format(data):
+    formated_matrix1 = []
+    formated_matrix2 = []
+    for val in data:
+        #formated_matrix1.append(np.array([val[0]]))
+        formated_matrix1.append(val[0])
+        formated_matrix2.append(val[1])
+    
+    return np.array(formated_matrix1), np.array(formated_matrix2)  
+
+def get_rnn_fea(train, sec_num_hidden = 128):
+    model = Sequential()
+    num_hidden = 128
+    model.add(Dense(train.shape[1], num_hidden, init='uniform', activation='sigmoid'))
+    model.add(Dropout(0.5))
+    model.add(Dense(num_hidden, sec_num_hidden, init='uniform', activation='sigmoid'))
+    model.add(PReLU((sec_num_hidden,)))
+    model.add(BatchNormalization((sec_num_hidden,)))
+    model.add(Dropout(0.5))
+    return model
+
+def set_rnn_fea(train, sec_num_hidden = 128, weights1 = None):
+    model = Sequential()
+    num_hidden = 256
+
+    model.add(Dense(train.shape[1], num_hidden, init='uniform', activation='sigmoid'))
+    model.add(Dropout(0.5))
+    model.add(Dense(num_hidden, sec_num_hidden, init='uniform', activation='sigmoid'))
+    model.add(PReLU((sec_num_hidden,)))
+    model.add(BatchNormalization((sec_num_hidden,)))
+    #model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+    return model
+
+def set_seperate_network(old_model, X_train1, X_train2):
+    left_hid = 64
+    right_hid = 64
+    weight =  old_model.layers[0].get_weights()
+    left = set_rnn_fea(X_train1, sec_num_hidden = left_hid)
+    left.set_weights(weight[:7])
+    right = set_rnn_fea(X_train2, sec_num_hidden = right_hid)
+    right.set_weights(weight[7:])
+    
+    model = Sequential()
+    model.add(concatenate([left, right], mode='concat'))
+    return model
+
+def multiple_layer_autoencoder(X_train, X_test, activation = 'linear', batch_size = 100, nb_epoch = 100, last_dim = 64):
+    nb_hidden_layers = [X_train.shape[1], 256, 128, last_dim]
+    print(nb_hidden_layers)
+    X_train_tmp = np.copy(X_train)
+    print(X_train_tmp.shape)
+    #X_test_tmp = np.copy(X_test)
+    encoders = []
+    for i, (n_in, n_out) in enumerate(zip(nb_hidden_layers[:-1], nb_hidden_layers[1:]), start=1):
+        print('Training the layer {}: Input {} -> Output {}'.format(i, n_in, n_out))
+
+        encoder = Sequential([Dense(input_dim=n_in, units=n_out, activation=activation)])
+
+        decoder = Sequential([Dense(input_dim=n_out, units=n_out, activation=activation),Dense(input_dim=n_out, units=n_in, activation=activation)])
+        ae = Sequential()
+        # Autoencoder = Sequential()
+        ae.add(encoder)
+        ae.add(decoder)
+        ae.summary()
+        ae.compile(optimizer='adam', loss='mse')
+
+        #import keras
+        early_stopping = keras.callbacks.EarlyStopping(
+            monitor='val_loss',
+            min_delta=0.0001,
+            patience=5,
+            verbose=0,
+            mode='auto'
+        )
+        NOISE_FACTOR=0.4
+        x_train_noisy = X_train_tmp + NOISE_FACTOR * np.random.normal(loc=0.0, scale=1.0, size=X_train_tmp.shape)
+
+        X_train_tmp= np.clip(x_train_noisy, 0., 1.)  # limit into [0, 1]
+        #x_test_noisy = np.clip(x_test_noisy, 0., 1.)  # limit into [0, 1]
+        ae.fit(X_train_tmp, X_train_tmp, callbacks = [early_stopping],epochs=20, batch_size=256, shuffle=True)
+        encoders.append(ae.layers[0])
+        X_train_tmp = encoder.predict(X_train_tmp)
+        print (X_train_tmp.shape)
+        #X_test_tmp = ae.predict(X_test_tmp)
+
+    #return encoders, X_train_tmp, X_test_tmp
+    return encoders
+
+def autoencoder_two_subnetwork_fine_tuning(X_train1, X_train2, Y_train, X_test1, X_test2, Y_test = None, batch_size =100, nb_epoch = 100):
+    print ('autoencode learning')
+    last_dim = 64
+    encoders1 = multiple_layer_autoencoder(X_train1, X_test1, activation = 'sigmoid', batch_size = batch_size, nb_epoch = nb_epoch, last_dim = last_dim)
+    encoders2 = multiple_layer_autoencoder(X_train2, X_test2, activation = 'sigmoid', batch_size = batch_size, nb_epoch = nb_epoch, last_dim = last_dim)
+    #pdb.set_trace()
+    
+    X_train1_tmp_bef = np.copy(X_train1)
+    X_test1_tmp_bef = np.copy(X_test1) 
+    for ae in encoders1:
+        X_train1_tmp_bef = ae.predict(X_train1_tmp_bef)
+        print("。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。")
+        print( X_train1_tmp_bef.shape)
+        X_test1_tmp_bef = ae.predict(X_test1_tmp_bef)
+    
+    X_train2_tmp_bef = np.copy(X_train2)
+    X_test2_tmp_bef = np.copy(X_test2) 
+    for ae in encoders2:
+        X_train2_tmp_bef = ae.predict(X_train2_tmp_bef)
+        print (X_train2_tmp_bef.shape)
+        X_test2_tmp_bef = ae.predict(X_test2_tmp_bef)
+        
+    prefilter_train_bef = np.concatenate((X_train1_tmp_bef, X_train2_tmp_bef), axis = 1)
+    prefilter_test_bef = np.concatenate((X_test1_tmp_bef, X_test2_tmp_bef), axis = 1)
+        
+    print ('fine tunning')
+    print ('number of layers:', len(encoders1))
+    sec_num_hidden = last_dim
+    model1 = Sequential()
+    ind = 0
+    for encoder in encoders1:
+        model1.add(encoder)
+        if ind != len(encoders1)  - 1 :
+            model1.add(Dropout(0.5)) 
+            ind = ind + 1
+    #print(model1.shape())
+    model1.add(PReLU(input_shape=(sec_num_hidden,)))
+    model1.add(BatchNormalization(input_shape=(sec_num_hidden,)))
+    #model1.add(PReLU((sec_num_hidden,)))
+    #model1.add(BatchNormalization((sec_num_hidden,)))
+    model1.add(Dropout(0.5))
+    
+
+    model2 = Sequential()
+    ind = 0
+    for encoder in encoders2:
+        model2.add(encoder)
+        if ind != len(encoders2)  - 1 :
+            model2.add(Dropout(0.5)) 
+            ind = ind + 1
+    model2.add(PReLU(input_shape=(sec_num_hidden,)))
+    model2.add(BatchNormalization(input_shape=(sec_num_hidden,)))
+    model2.add(Dropout(0.5))
+
+    #model = Sequential()
+    #model.add(concatenate([model1.output, model2.output]))
+    merge=concatenate([model1.output, model2.output])
+    total_hid = sec_num_hidden + sec_num_hidden
+
+    x=Dense(input_dim=total_hid, units=2)(merge)
+    x=Dropout(0.5)(x)
+    x=Activation('softmax')(x)
+    merged_model = Model([model1.input, model2.input], x)
+    # model.get_config(verbose=0)
+    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    merged_model.compile(loss='categorical_crossentropy', optimizer=sgd)  # 'rmsprop')
+    merged_model.fit([X_train1, X_train2], Y_train, batch_size=100, nb_epoch=100, verbose=0)
+    X_train1_tmp = np.copy(X_train1)
+    X_test1_tmp = np.copy(X_test1)  
+    #ae=merged_model.layers[0]
+    model1.compile(loss='mean_squared_error', optimizer='adam')
+    X_train1_tmp = model1.predict(X_train1_tmp)
+    X_test1_tmp = model1.predict(X_test1_tmp)
+
+    X_train2_tmp = np.copy(X_train2)
+    X_test2_tmp = np.copy(X_test2)
+    model2.compile(loss='mean_squared_error', optimizer='adam')
+    X_train2_tmp =  model2.predict(X_train2_tmp)
+    X_test2_tmp =  model2.predict(X_test2_tmp)
+    
+    prefilter_train = np.concatenate((X_train1_tmp, X_train2_tmp), axis = 1)
+    prefilter_test = np.concatenate((X_test1_tmp, X_test2_tmp), axis = 1)
+    return prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef
+
+def merge_seperate_network(X_train1, X_train2, Y_train):
+    left_hid = 128
+    right_hid = 64
+    left = get_rnn_fea(X_train1, sec_num_hidden = left_hid)
+    right = get_rnn_fea(X_train2, sec_num_hidden = right_hid)
+    
+    model = Sequential()
+    model.add(concatenate([left, right], mode='concat'))
+    total_hid = left_hid + right_hid
+    
+    model.add(Dense(total_hid, 2))
+    model.add(Dropout(0.3))
+    model.add(Activation('softmax'))
+    
+    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss='categorical_crossentropy', optimizer=sgd) #'rmsprop')
+    
+    model.fit([X_train1, X_train2], Y_train, batch_size=100, nb_epoch=100, verbose=0)
+    
+    return model
+
+def merge_seperate_network_with_chem(X_train1, X_train2, chem_train1, chem_train2, Y_train):
+    left_hid = 128
+    right_hid = 64
+    chem_left_hid = 128
+    chem_right_hid = 20
+    left = get_rnn_fea(X_train1, sec_num_hidden = left_hid)
+    right = get_rnn_fea(X_train2, sec_num_hidden = right_hid)
+    chem_left = get_rnn_fea(chem_train1, sec_num_hidden = chem_left_hid)
+    chem_right = get_rnn_fea(chem_train2, sec_num_hidden = chem_right_hid)
+    model = Sequential()
+    model.add(concatenate([left, right, chem_left, chem_right], mode='concat'))
+    total_hid = left_hid + right_hid + chem_left_hid + chem_right_hid
+    model.add(Dense(total_hid, 2))
+    model.add(Activation('softmax'))
+    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss='categorical_crossentropy', optimizer=sgd) #'rmsprop')
+    model.fit([X_train1, X_train2, chem_train1, chem_train2], Y_train, batch_size=100, nb_epoch=100, verbose=0)
+    
+    return model
+    
+def shuffle_two_array(X, Y, labels):
+    new_array = range(len(labels))
+    np.random.shuffle(new_array)
+    #pdb.set_trace()
+    new_X = []
+    new_Y = []
+    new_labels = []
+    for val in new_array:
+        new_X.append(X[val])
+        new_Y.append(Y[val])
+        new_labels.append(labels[val])
+    #X, labels = new_array[:, 1:-1].astype(np.float32), new_array[:, -1]
+    
+    return np.array(new_X), np.array(new_Y), np.array(new_labels)
+
+def plot_roc_curve(labels, probality, legend_text, auc_tag = True):
+    #fpr2, tpr2, thresholds = roc_curve(labels, pred_y)
+    fpr, tpr, thresholds = roc_curve(labels, probality) #probas_[:, 1])
+    roc_auc = auc(fpr, tpr)
+    if auc_tag:
+        rects1 = plt.plot(fpr, tpr, label=legend_text +' (AUC=%6.3f) ' %roc_auc)
+    else:
+        rects1 = plt.plot(fpr, tpr, label=legend_text )
+
+def PLRPI(dataset):
+    X, labels = get_data_deepmind(dataset, seperate = True)
+    #print(X)
+    #pdb.set_trace()
+    #X, labels = shuffle_two_array(X, np.array(labels))
+    X_data1, X_data2 = transfer_array_format(X)
+    print("99999999999999999999999999999999999999")
+    print (X_data1.shape, X_data2.shape)
+    print("99999999999999999999999999999999999999")
+    X_data1, scaler1 = preprocess_data(X_data1)
+    X_data2, scaler2 = preprocess_data(X_data2)
+    y, encoder = preprocess_labels(labels)
+    
+    num_cross_val = 5
+    all_performance = []
+    all_performance_rf = []
+    all_performance_bef = []
+    all_performance_blend = []
+    all_labels = []
+    all_prob = {}
+    num_classifier = 3
+    all_prob[0] = []
+    all_prob[1] = []
+    all_prob[2] = []
+    all_prob[3] = []
+    all_averrage = []
+    for fold in range(num_cross_val):
+        train1 = np.array([x for i, x in enumerate(X_data1) if i % num_cross_val != fold])
+        test1 = np.array([x for i, x in enumerate(X_data1) if i % num_cross_val == fold])
+        train2 = np.array([x for i, x in enumerate(X_data2) if i % num_cross_val != fold])
+        test2 = np.array([x for i, x in enumerate(X_data2) if i % num_cross_val == fold])
+        train_label = np.array([x for i, x in enumerate(y) if i % num_cross_val != fold])
+        test_label = np.array([x for i, x in enumerate(y) if i % num_cross_val == fold])
+  
+          
+        real_labels = []
+        for val in test_label:
+            if val[0] == 1:
+                real_labels.append(0)
+            else:
+                real_labels.append(1)
+
+        train_label_new = []
+        for val in train_label:
+            if val[0] == 1:
+                train_label_new.append(0)
+            else:
+                train_label_new.append(1)
+        
+        blend_train = np.zeros((train1.shape[0], num_classifier)) # Number of training data x Number of classifiers
+        blend_test = np.zeros((test1.shape[0], num_classifier)) # Number of testing data x Number of classifiers 
+        skf = list(StratifiedKFold(train_label_new, num_classifier))  
+        class_index = 0
+        prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
+        
+        
+        real_labels = []
+        for val in test_label:
+            if val[0] == 1:
+                real_labels.append(0)
+            else:
+                real_labels.append(1)
+                
+        all_labels = all_labels + real_labels
+        tmp_aver = [0] * len(real_labels)
+        print ('deep autoencoder')
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(prefilter_train, train_label_new)
+        ae_y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+        all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob]
+        tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob, tmp_aver)]
+        proba = transfer_label_from_prob(ae_y_pred_prob)
+        #pdb.set_trace()            
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance.append([acc, precision, sensitivity, specificity, MCC])
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(train_label_new), blend_train, blend_test)
+        
+        print ('deep autoencoder without fine tunning')
+        class_index = class_index + 1
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(prefilter_train_bef, train_label_new)
+        ae_y_pred_prob_bef = clf.predict_proba(prefilter_test_bef)[:,1]
+        all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob_bef]
+        tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob_bef, tmp_aver)]
+        proba = transfer_label_from_prob(ae_y_pred_prob_bef)
+        #pdb.set_trace()            
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance_bef.append([acc, precision, sensitivity, specificity, MCC])
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test_bef, prefilter_train_bef, np.array(train_label_new), blend_train, blend_test)
+        
+        print ('random forest using raw feature')
+        class_index = class_index + 1
+        prefilter_train = np.concatenate((train1, train2), axis = 1)
+        prefilter_test = np.concatenate((test1, test2), axis = 1)
+        
+        clf = GradientBoostingClassifier(n_estimators=40)
+        clf.fit(prefilter_train, train_label_new)
+        ae_y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+        all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob]
+        tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob, tmp_aver)]
+        proba = transfer_label_from_prob(ae_y_pred_prob)
+                 
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance_rf.append([acc, precision, sensitivity, specificity, MCC])
+        get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(train_label_new), blend_train, blend_test)
+        
+        class_index = class_index + 1
+        bclf = LogisticRegression()
+        bclf.fit(blend_train, train_label_new)
+        #print bclf.coef_, bclf.intercept_
+        stack_y_prob = bclf.predict_proba(blend_test)[:,1]
+        all_prob[class_index] = all_prob[class_index] + [val for val in stack_y_prob]
+        Y_test_predict = bclf.predict(blend_test)
+        print ('stacked ensembling')
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), Y_test_predict,  real_labels)
+        print (acc, precision, sensitivity, specificity, MCC)
+        all_performance_blend.append([acc, precision, sensitivity, specificity, MCC])     
+        print ('---' * 50)
+        all_averrage = all_averrage + tmp_aver
+        
+    print( 'mean performance of deep autoencoder')
+    print (np.mean(np.array(all_performance), axis=0))
+    print ('---' * 50 )
+    print ('mean performance of deep autoencoder without fine tunning')
+    print (np.mean(np.array(all_performance_bef), axis=0))
+    print ('---' * 50 )
+    print ('mean performance of random forest using raw feature')
+    print (np.mean(np.array(all_performance_rf), axis=0))
+    print ('---' * 50)
+    print ('mean performance of stacked ensembling')
+    print (np.mean(np.array(all_performance_blend), axis=0))
+    print ('---' * 50)
+    
+def predict_new_samples(RNA_file, protein_file):
+    train, trainlabel = get_data_deepmind('RPI488', seperate = True)
+    test, pairs = prepare_complex_feature(RNA_file, protein_file, seperate = True)
+    train_data1, train_data2 = transfer_array_format(train)
+    print (train_data1.shape, train_data2.shape)
+    train_data1, scaler1 = preprocess_data(train_data1)
+    train_data2, scaler2 = preprocess_data(train_data2)
+    
+    test_data1, test_data2 = transfer_array_format(test)
+    print (test_data1.shape, test_data2.shape)
+    test_data1, scaler1 = preprocess_data(test_data1, scaler = scaler1)
+    test_data2, scaler2 = preprocess_data(test_data2, scaler = scaler2)
+    trainlabel_new, encoder = preprocess_labels(trainlabel)
+    num_class = 3
+    blend_train = np.zeros((train.shape[0], num_class)) # Number of training data x Number of classifiers
+    blend_test = np.zeros((test.shape[0], num_class)) # Number of testing data x Number of classifiers 
+    skf = list(StratifiedKFold(trainlabel, num_class))  
+    class_index = 0
+    prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(train_data1, train_data2, 
+                                                                            trainlabel_new, test_data1, test_data2)
+
+    print ('deep autoencoder')
+    clf = GradientBoostingClassifier(n_estimators=40)
+    clf.fit(prefilter_train, trainlabel)
+    ae_y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+    
+    proba = transfer_label_from_prob(ae_y_pred_prob)
+    get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(trainlabel), blend_train, blend_test)
+    print ('deep autoencoder without fine tunning')
+    class_index = class_index + 1
+    clf = GradientBoostingClassifier(n_estimators=40)
+    clf.fit(prefilter_train_bef, trainlabel)
+    ae_y_pred_prob = clf.predict_proba(prefilter_test_bef)[:,1]
+    
+    proba = transfer_label_from_prob(ae_y_pred_prob)
+    get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test_bef, prefilter_train_bef, np.array(trainlabel), blend_train, blend_test)
+    
+    print( 'random forest')
+    class_index = class_index + 1
+    prefilter_train = np.concatenate((train_data1, train_data2), axis = 1)
+    prefilter_test = np.concatenate((test_data1, test_data2), axis = 1)
+    
+    clf = GradientBoostingClassifier(n_estimators=40)
+    clf.fit(prefilter_train, trainlabel)
+    ae_y_pred_prob = clf.predict_proba(prefilter_test)[:,1]
+    proba = transfer_label_from_prob(ae_y_pred_prob)
+    get_blend_data(class_index, GradientBoostingClassifier(n_estimators=40), skf, prefilter_test, prefilter_train, np.array(trainlabel), blend_train, blend_test)
+    blend_train, scaler1 = preprocess_data(blend_train, stand = False)
+    blend_test, scaler1 = preprocess_data(blend_test, scaler = scaler1, stand = False)
+    
+    bclf = LogisticRegression()
+    bclf.fit(blend_train, trainlabel)
+    proba_pred = bclf.predict_proba(blend_test)[:, 1]
+    #proba = bclf.predict(blend_test)
+    print( 'stacked ensembling')
+    for pro, pair in zip(proba_pred, pairs):
+        print (pair, pro)
+
+
+def calculate_acc(label_len, pred, label):
+    num =0
+    for val1, val2 in zip(pred, label):
+        if val1 == val2:
+            num = num + 1
+    return float(num)/label_len
+
+
+parser = argparse.ArgumentParser(description="""PLRPI: Prediction of Plant lncRNA-protein Interactions""")
+
+parser.add_argument('-dataset',
+                    type=str, help='which dataset you want to do 5-fold cross-validation')
+
+parser.add_argument('-r',
+                    type=str, help='RNA fasta file to store RNAs')
+
+parser.add_argument('-p',
+                    type=str, help='protein fasta file to store proteins')
+
+args = parser.parse_args()
+dataset = args.dataset="RPI369"
+if dataset is not None:
+    PLRPI(dataset)
+else:
+    RNA_file = args.r="ncRNA-protein/RPI369_rna.fa"
+    protein_file = args.p="ncRNA-protein/RPI369_protein.fa"
+    if RNA_file is None or protein_file is None:
+        print('you must input RNA and protein fasta file')
+    predict_new_samples(RNA_file, protein_file)
